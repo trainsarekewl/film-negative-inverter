@@ -25,3 +25,6 @@ Thumbs.db
 .vscode/
 
 plan.md
+
+tests/data/
+

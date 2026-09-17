@@ -1,0 +1,27 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+
+# --- PyInstaller ---
+# Keep filmneg.spec tracked (do NOT ignore *.spec).
+*.manifest
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+plan.md

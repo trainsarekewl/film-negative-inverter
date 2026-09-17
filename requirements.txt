@@ -1,0 +1,6 @@
+numpy
+rawpy
+tifffile
+opencv-python
+colour-science
+pytest

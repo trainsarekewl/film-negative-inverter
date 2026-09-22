@@ -1,7 +1,4 @@
-"""Format-agnostic image I/O: load into one linear float32 RGB representation.
-
-TIFF and JPEG loading land in separate changes; this one implements RAW.
-"""
+"""Format-agnostic image I/O: load into one linear float32 RGB representation."""
 
 from __future__ import annotations
 
@@ -15,6 +12,9 @@ RAW_EXTENSIONS = {".nef", ".cr2", ".cr3", ".arw", ".dng", ".raf", ".orf", ".rw2"
 TIFF_EXTENSIONS = {".tif", ".tiff"}
 JPEG_EXTENSIONS = {".jpg", ".jpeg"}
 
+# dtype -> full-scale value used to normalize integer sample data to [0, 1].
+_MAX_VALUE_BY_ITEMSIZE = {1: 255.0, 2: 65535.0, 4: 4294967295.0}
+
 
 @dataclass
 class Image:
@@ -26,21 +26,53 @@ class Image:
     exif: dict[str, Any] = field(default_factory=dict)
 
 
-def load_linear(path: str | Path, *, proxy: bool = False) -> Image:
+def load_linear(path: str | Path, *, proxy: bool = False, input_encoding: str = "auto") -> Image:
     """Dispatch by extension into one linear float32 RGB :class:`Image`.
 
     ``proxy=True`` requests a fast, lower-resolution decode for preview use
     where the format supports it (currently: RAW half-size demosaic).
+
+    ``input_encoding`` controls whether TIFF/JPEG source samples are treated
+    as sRGB-encoded (the default assumption, and the only sane one for JPEG)
+    or already linear (e.g. a TIFF produced by another linear-light tool).
+    RAW is always linear straight out of libraw, so this is ignored for RAW.
     """
     path = Path(path)
     ext = path.suffix.lower()
     if ext in RAW_EXTENSIONS:
         return _load_raw(path, proxy=proxy)
     if ext in TIFF_EXTENSIONS:
-        raise NotImplementedError("TIFF loading is not implemented yet")
+        return _load_tiff(path, input_encoding=input_encoding)
     if ext in JPEG_EXTENSIONS:
-        raise NotImplementedError("JPEG loading is not implemented yet")
+        return _load_jpeg(path, input_encoding=input_encoding)
     raise ValueError(f"Unsupported file extension: {ext!r}")
+
+
+def srgb_to_linear(rgb: np.ndarray) -> np.ndarray:
+    """Undo the sRGB transfer function. ``rgb`` is float in [0, 1]."""
+    rgb = np.clip(rgb, 0.0, 1.0)
+    return np.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4).astype(np.float32)
+
+
+def _to_rgb3(array: np.ndarray) -> np.ndarray:
+    """Drop alpha/extra samples and broadcast grayscale to 3 channels."""
+    if array.ndim == 2:
+        return np.stack([array] * 3, axis=-1)
+    if array.shape[-1] == 1:
+        return np.repeat(array, 3, axis=-1)
+    return array[..., :3]
+
+
+def _resolve_encoding(rgb: np.ndarray, input_encoding: str) -> tuple[np.ndarray, str]:
+    """Apply the sRGB->linear transfer function unless told the data already
+    is linear. "auto" assumes sRGB, the near-universal default for scanned
+    film TIFFs/JPEGs.
+    """
+    if input_encoding == "linear":
+        return rgb, "linear"
+    if input_encoding in ("auto", "srgb"):
+        return srgb_to_linear(rgb), "srgb"
+    raise ValueError(f"Unknown input_encoding: {input_encoding!r}")
 
 
 def _load_raw(path: Path, *, proxy: bool) -> Image:
@@ -78,3 +110,75 @@ def _extract_raw_exif(path: Path) -> dict[str, Any]:
     with open(path, "rb") as f:
         tags = exifread.process_file(f, details=False)
     return {str(key): str(value) for key, value in tags.items()}
+
+
+def _load_tiff(path: Path, *, input_encoding: str) -> Image:
+    import tifffile
+
+    array = tifffile.imread(str(path))
+    array = _to_rgb3(array)
+
+    if np.issubdtype(array.dtype, np.floating):
+        source_bit_depth = array.dtype.itemsize * 8
+        rgb = array.astype(np.float32)
+    else:
+        source_bit_depth = array.dtype.itemsize * 8
+        max_value = _MAX_VALUE_BY_ITEMSIZE.get(array.dtype.itemsize)
+        if max_value is None:
+            raise ValueError(f"Unsupported TIFF sample dtype: {array.dtype}")
+        rgb = array.astype(np.float32) / max_value
+
+    rgb, resolved_encoding = _resolve_encoding(rgb, input_encoding)
+    return Image(
+        rgb=rgb,
+        source_bit_depth=source_bit_depth,
+        input_encoding=resolved_encoding,
+        exif=_extract_tiff_exif(path),
+    )
+
+
+def _extract_tiff_exif(path: Path) -> dict[str, Any]:
+    """Best-effort EXIF from the TIFF's own tag directory."""
+    import tifffile
+
+    try:
+        with tifffile.TiffFile(str(path)) as tif:
+            page = tif.pages[0]
+            return {tag.name: tag.value for tag in page.tags}
+    except Exception:  # noqa: BLE001 -- best-effort metadata must never fail a load
+        return {}
+
+
+def _load_jpeg(path: Path, *, input_encoding: str) -> Image:
+    from PIL import Image as PILImage
+
+    with PILImage.open(path) as pil_image:
+        array = np.array(pil_image.convert("RGB"))
+        exif = _extract_jpeg_exif(pil_image)
+
+    rgb = array.astype(np.float32) / 255.0
+    rgb, resolved_encoding = _resolve_encoding(rgb, input_encoding)
+    return Image(
+        rgb=rgb,
+        source_bit_depth=8,
+        input_encoding=resolved_encoding,
+        exif=exif,
+    )
+
+
+def _extract_jpeg_exif(pil_image: Any) -> dict[str, Any]:
+    """Best-effort EXIF via ``piexif``, keyed by IFD name for round-tripping
+    back out on export.
+    """
+    try:
+        import piexif
+    except ImportError:
+        return {}
+
+    raw_exif = pil_image.info.get("exif")
+    if not raw_exif:
+        return {}
+    try:
+        return piexif.load(raw_exif)
+    except Exception:  # noqa: BLE001 -- best-effort metadata must never fail a load
+        return {}

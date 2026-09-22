@@ -8,6 +8,8 @@ from typing import Any
 
 import numpy as np
 
+from filmneg.engine.settings import FilmSettings
+
 RAW_EXTENSIONS = {".nef", ".cr2", ".cr3", ".arw", ".dng", ".raf", ".orf", ".rw2", ".pef"}
 TIFF_EXTENSIONS = {".tif", ".tiff"}
 JPEG_EXTENSIONS = {".jpg", ".jpeg"}
@@ -52,6 +54,82 @@ def srgb_to_linear(rgb: np.ndarray) -> np.ndarray:
     """Undo the sRGB transfer function. ``rgb`` is float in [0, 1]."""
     rgb = np.clip(rgb, 0.0, 1.0)
     return np.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4).astype(np.float32)
+
+
+def linear_to_srgb(rgb: np.ndarray) -> np.ndarray:
+    """Apply the sRGB transfer function. ``rgb`` is linear-light float in [0, 1]."""
+    rgb = np.clip(rgb, 0.0, 1.0)
+    return np.where(rgb <= 0.0031308, rgb * 12.92, 1.055 * rgb ** (1.0 / 2.4) - 0.055).astype(
+        np.float32
+    )
+
+
+def export(image: Image, path: str | Path, settings: FilmSettings) -> None:
+    """Encode ``image.rgb`` (linear) per ``settings.output`` and write it out.
+
+    EXIF is copied best-effort: only the piexif-shaped dict produced by
+    :func:`_load_jpeg` can be re-embedded, and only into a JPEG output --
+    everything else (RAW's flat exifread dict, TIFF's tag dict, or no exif
+    at all) is silently dropped rather than failing the export.
+    """
+    path = Path(path)
+    ext = path.suffix.lower()
+
+    encoded = (
+        image.rgb if settings.output.color_space == "linear" else linear_to_srgb(image.rgb)
+    )
+
+    if ext in TIFF_EXTENSIONS:
+        _export_tiff(encoded, path, settings)
+    elif ext in JPEG_EXTENSIONS:
+        _export_jpeg(encoded, path, settings, image.exif)
+    else:
+        raise ValueError(f"Unsupported export extension: {ext!r}")
+
+
+def _quantize(rgb: np.ndarray, max_value: int) -> np.ndarray:
+    dtype = np.uint8 if max_value <= 255 else np.uint16
+    return np.clip(rgb * max_value + 0.5, 0, max_value).astype(dtype)
+
+
+def _export_tiff(rgb: np.ndarray, path: Path, settings: FilmSettings) -> None:
+    import tifffile
+
+    bit_depth = settings.output.bit_depth
+    if bit_depth not in (8, 16):
+        raise ValueError(f"Unsupported TIFF export bit depth: {bit_depth}")
+    tifffile.imwrite(str(path), _quantize(rgb, 2**bit_depth - 1))
+
+
+def _export_jpeg(rgb: np.ndarray, path: Path, settings: FilmSettings, exif: dict[str, Any]) -> None:
+    from PIL import Image as PILImage
+
+    data = _quantize(rgb, 255)
+    pil_image = PILImage.fromarray(data, mode="RGB")
+
+    save_kwargs: dict[str, Any] = {"quality": settings.output.jpeg_quality}
+    exif_bytes = _build_jpeg_exif_bytes(exif)
+    if exif_bytes is not None:
+        save_kwargs["exif"] = exif_bytes
+    pil_image.save(path, "JPEG", **save_kwargs)
+
+
+_PIEXIF_IFD_KEYS = ("0th", "Exif", "GPS", "1st", "thumbnail")
+
+
+def _build_jpeg_exif_bytes(exif: dict[str, Any]) -> bytes | None:
+    if not exif or not any(key in exif for key in _PIEXIF_IFD_KEYS):
+        return None
+
+    try:
+        import piexif
+    except ImportError:
+        return None
+
+    try:
+        return piexif.dump(exif)
+    except Exception:  # noqa: BLE001 -- best-effort metadata must never fail an export
+        return None
 
 
 def _to_rgb3(array: np.ndarray) -> np.ndarray:

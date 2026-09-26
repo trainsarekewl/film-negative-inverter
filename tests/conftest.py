@@ -1,21 +1,21 @@
 """Shared pytest fixtures.
 
 Provides a synthetic film-negative fixture: a known ground-truth positive
-image (gradients + solid color patches, with a white border simulating the
+image (gradients + solid color patches, with a black border simulating the
 unexposed rebate) is forward-modeled into a synthetic color-negative scan
-and saved as tiny TIFF/JPEG files under tests/data/synthetic/. Later
-milestones' inversion code is expected to recover the ground-truth positive
-from these files within tolerance.
+and saved as tiny TIFF/JPEG files under tests/data/synthetic/. The inverter
+is expected to recover the ground-truth positive from these files.
 
-Forward model -- the exact inverse of the density invert described in
-plan.md's M2 spec (``t = x / base; D = -log10(t + eps)``):
+Forward model -- the exact inverse of ``invert.py``'s density mode with
+``paper_black = 0`` and ``scan_exposure_ev = 0``:
 
-    D = DMAX * (1 - positive)
-    t = base_rgb * 10 ** (-D)
+    printed = positive ** (1 / grade)
+    light   = 1 - 0.9 * printed
+    t       = base_rgb * light ** dmax        # == base * 10 ** -D
 
-D is zero (t == base_rgb) wherever positive == 1, which is why the rebate
-border below is pure white: it mimics unexposed film, whose only density is
-the base/Dmin itself.
+Bright subjects become dense (low t); a positive of 0 gives t == base, which
+is why the rebate border is black: unexposed film is clear film base, and
+clear film prints black.
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ from filmneg.engine.settings import FilmSettings, OutputSettings
 
 SYNTHETIC_BASE_RGB = (1.0, 0.55, 0.25)  # plausible orange film-base mask
 SYNTHETIC_DMAX = 1.8
+SYNTHETIC_PAPER_GRADE = 2.0
 IMAGE_SIZE = 48
 REBATE_MARGIN = 6  # px border simulating unexposed film
 
@@ -43,13 +44,14 @@ class SyntheticNegative:
     negative_rgb: np.ndarray  # float32 HxWx3, the linear negative transmittance
     base_rgb: tuple[float, float, float]
     dmax: float
+    paper_grade: float
     rebate_rect: tuple[float, float, float, float]  # normalized (x0, y0, x1, y1)
     tiff_path: Path
     jpeg_path: Path
 
 
 def _make_ground_truth_positive(size: int, margin: int) -> np.ndarray:
-    """Gradients + solid color patches, with a white border (the rebate)."""
+    """Gradients + solid color patches, with a black border (the rebate)."""
     positive = np.zeros((size, size, 3), dtype=np.float32)
 
     inner = slice(margin, size - margin)
@@ -77,21 +79,31 @@ def _make_ground_truth_positive(size: int, margin: int) -> np.ndarray:
         row1 = size - margin if i == len(patches) - 1 else row0 + patch_h
         positive[row0:row1, inner, :] = color
 
-    # Rebate border: unexposed film, i.e. pure white positive (D == 0).
-    positive[:margin, :, :] = 1.0
-    positive[-margin:, :, :] = 1.0
-    positive[:, :margin, :] = 1.0
-    positive[:, -margin:, :] = 1.0
+    # Rebate border: unexposed film, which prints black (D == 0).
+    positive[:margin, :, :] = 0.0
+    positive[-margin:, :, :] = 0.0
+    positive[:, :margin, :] = 0.0
+    positive[:, -margin:, :] = 0.0
 
     return positive
 
 
 def _forward_model_negative(
-    positive: np.ndarray, base_rgb: tuple[float, float, float], dmax: float
+    positive: np.ndarray,
+    base_rgb: tuple[float, float, float],
+    dmax: float,
+    paper_grade: float = SYNTHETIC_PAPER_GRADE,
 ) -> np.ndarray:
-    density = dmax * (1.0 - positive)
+    printed = np.clip(positive, 0.0, 1.0) ** (1.0 / paper_grade)
+    light = 1.0 - 0.9 * printed
     base = np.asarray(base_rgb, dtype=np.float32)
-    return (base * 10.0 ** (-density)).astype(np.float32)
+    return (base * light**dmax).astype(np.float32)
+
+
+@pytest.fixture(scope="session")
+def make_negative():
+    """The forward model, for tests that build their own small negatives."""
+    return _forward_model_negative
 
 
 @pytest.fixture(scope="session")
@@ -116,6 +128,7 @@ def synthetic_negative() -> SyntheticNegative:
         negative_rgb=negative_rgb,
         base_rgb=SYNTHETIC_BASE_RGB,
         dmax=SYNTHETIC_DMAX,
+        paper_grade=SYNTHETIC_PAPER_GRADE,
         rebate_rect=rebate_rect,
         tiff_path=tiff_path,
         jpeg_path=jpeg_path,

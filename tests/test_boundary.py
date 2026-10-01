@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import pkgutil
 import sys
 from pathlib import Path
 
@@ -23,9 +24,9 @@ def _is_qt_module(name: str) -> bool:
 
 
 def test_engine_import_does_not_pull_in_qt():
-    importlib.import_module("filmneg.engine")
-    importlib.import_module("filmneg.engine.io")
-    importlib.import_module("filmneg.engine.settings")
+    engine = importlib.import_module("filmneg.engine")
+    for module in pkgutil.iter_modules(engine.__path__):
+        importlib.import_module(f"filmneg.engine.{module.name}")
 
     loaded_qt_modules = [name for name in sys.modules if _is_qt_module(name)]
     assert not loaded_qt_modules, f"importing filmneg.engine pulled in Qt: {loaded_qt_modules}"

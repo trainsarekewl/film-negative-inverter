@@ -25,10 +25,11 @@ class GeometrySettings:
     ``crop`` and ``base_sample_rect`` are normalized ``(x0, y0, x1, y1)`` in
     [0, 1] so they survive proxy/full-res resolution changes. The base is
     sampled once and cached in ``FilmSettings.base_rgb`` so cropping the
-    rebate away later doesn't lose it.
+    rebate away later doesn't lose it. ``base_sample_rect`` is in original-scan
+    coordinates; ``crop`` is in the rotated/flipped orientation.
     """
 
-    rotate_degrees: float = 0.0
+    rotate_degrees: float = 0.0  # clockwise, multiples of 90
     flip_horizontal: bool = False
     flip_vertical: bool = False
     crop: tuple[float, float, float, float] | None = None
@@ -52,7 +53,12 @@ class InvertSettings:
 
 @dataclass
 class ToneSettings:
-    """Per-channel black/white points and contrast, in log-density decades."""
+    """Per-channel black/white points (linear) and contrast.
+
+    ``auto`` derives the points from percentiles instead of using the stored
+    ones. ``contrast_decades`` is decades of output per decade of input,
+    pivoting on middle grey; 1.0 is the identity.
+    """
 
     auto: bool = True
     black_point: tuple[float, float, float] = (0.0, 0.0, 0.0)
@@ -62,6 +68,9 @@ class ToneSettings:
 
 @dataclass
 class ColorSettings:
+    """Per-channel gains plus temperature (+ warmer) and tint (+ more magenta),
+    both in stops."""
+
     wb_gains: tuple[float, float, float] = (1.0, 1.0, 1.0)
     temperature: float = 0.0
     tint: float = 0.0

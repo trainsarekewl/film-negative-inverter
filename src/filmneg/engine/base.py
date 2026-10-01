@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from filmneg.engine.geometry import rect_slices
+
 # Pixels near-saturated in *every* channel are assumed to be bare backlight
 # leaking past the film holder -- neutral white, brighter than the base. The
 # orange base itself may clip in red alone, so one clipped channel isn't enough.
@@ -24,15 +26,8 @@ def sample_base(
     works on a proxy and on the full-res image. The median ignores dust
     specks and scratches inside the patch that a mean would absorb.
     """
-    x0, y0, x1, y1 = rect
-    if not (0.0 <= x0 < x1 <= 1.0 and 0.0 <= y0 < y1 <= 1.0):
-        raise ValueError(f"Invalid normalized rect: {rect!r}")
-
-    height, width = rgb.shape[:2]
-    col0, col1 = _to_pixel_span(x0, x1, width)
-    row0, row1 = _to_pixel_span(y0, y1, height)
-
-    patch = rgb[row0:row1, col0:col1, :3].reshape(-1, 3)
+    rows, cols = rect_slices(rect, *rgb.shape[:2])
+    patch = rgb[rows, cols, :3].reshape(-1, 3)
     return _as_rgb_tuple(np.median(patch, axis=0))
 
 
@@ -54,13 +49,6 @@ def auto_base(rgb: np.ndarray, brightest_percent: float = 0.5) -> tuple[float, f
     brightness = pixels.mean(axis=1)
     threshold = np.percentile(brightness, 100.0 - brightest_percent)
     return _as_rgb_tuple(np.median(pixels[brightness >= threshold], axis=0))
-
-
-def _to_pixel_span(start: float, end: float, size: int) -> tuple[int, int]:
-    """Normalized span -> pixel indices, never empty."""
-    first = min(int(np.floor(start * size)), size - 1)
-    last = max(int(np.ceil(end * size)), first + 1)
-    return first, last
 
 
 def _as_rgb_tuple(values: np.ndarray) -> tuple[float, float, float]:

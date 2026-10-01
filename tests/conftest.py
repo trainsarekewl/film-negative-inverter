@@ -64,7 +64,9 @@ def _make_ground_truth_positive(size: int, margin: int) -> np.ndarray:
     positive[inner, inner, 1] = yy
     positive[inner, inner, 2] = 1.0 - xx
 
-    # Solid patches (incl. black/white/gray) as known flat reference values.
+    # Solid patches (incl. black/white/gray) as known flat reference values,
+    # in a strip down the left third so the gradients stay visible beside it.
+    strip = slice(margin, margin + inner_size // 3)
     patches = [
         (0.0, 0.0, 0.0),
         (1.0, 1.0, 1.0),
@@ -77,7 +79,7 @@ def _make_ground_truth_positive(size: int, margin: int) -> np.ndarray:
     for i, color in enumerate(patches):
         row0 = margin + i * patch_h
         row1 = size - margin if i == len(patches) - 1 else row0 + patch_h
-        positive[row0:row1, inner, :] = color
+        positive[row0:row1, strip, :] = color
 
     # Rebate border: unexposed film, which prints black (D == 0).
     positive[:margin, :, :] = 0.0

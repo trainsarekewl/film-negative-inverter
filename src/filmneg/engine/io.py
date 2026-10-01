@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 
+from filmneg.engine.color import linear_to_srgb, srgb_to_linear
 from filmneg.engine.settings import FilmSettings
 
 RAW_EXTENSIONS = {".nef", ".cr2", ".cr3", ".arw", ".dng", ".raf", ".orf", ".rw2", ".pef"}
@@ -48,20 +49,6 @@ def load_linear(path: str | Path, *, proxy: bool = False, input_encoding: str = 
     if ext in JPEG_EXTENSIONS:
         return _load_jpeg(path, input_encoding=input_encoding)
     raise ValueError(f"Unsupported file extension: {ext!r}")
-
-
-def srgb_to_linear(rgb: np.ndarray) -> np.ndarray:
-    """Undo the sRGB transfer function. ``rgb`` is float in [0, 1]."""
-    rgb = np.clip(rgb, 0.0, 1.0)
-    return np.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4).astype(np.float32)
-
-
-def linear_to_srgb(rgb: np.ndarray) -> np.ndarray:
-    """Apply the sRGB transfer function. ``rgb`` is linear-light float in [0, 1]."""
-    rgb = np.clip(rgb, 0.0, 1.0)
-    return np.where(rgb <= 0.0031308, rgb * 12.92, 1.055 * rgb ** (1.0 / 2.4) - 0.055).astype(
-        np.float32
-    )
 
 
 def export(image: Image, path: str | Path, settings: FilmSettings) -> None:

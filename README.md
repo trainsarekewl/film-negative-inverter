@@ -4,10 +4,6 @@ Converts scanned/photographed film negatives (JPEG, RAW, TIFF) into positive
 images, working in linear light with a density/log-based inversion model
 (à la darktable's *negadoctor*).
 
-## Status
-
-Early scaffolding — see [plan.md](plan.md) for the milestone roadmap.
-
 ## Development setup
 
 ```sh
